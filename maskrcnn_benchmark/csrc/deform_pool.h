@@ -6,7 +6,6 @@
 #include "cuda/vision.h"
 #endif
 
-
 // Interface for Python
 void deform_psroi_pooling_forward(
     at::Tensor input, 
@@ -23,7 +22,8 @@ void deform_psroi_pooling_forward(
     const int sample_per_part, 
     const float trans_std)
 {
-  if (input.type().is_cuda()) {
+  // [修改 1] input.type().is_cuda() -> input.is_cuda()
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return deform_psroi_pooling_cuda_forward(
         input, bbox, trans, out, top_count, 
@@ -31,10 +31,11 @@ void deform_psroi_pooling_forward(
         pooled_size, part_size, sample_per_part, trans_std
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    // [修改 2] AT_ERROR -> TORCH_CHECK
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 
@@ -55,7 +56,7 @@ void deform_psroi_pooling_backward(
     const int sample_per_part, 
     const float trans_std) 
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return deform_psroi_pooling_cuda_backward(
         out_grad, input, bbox, trans, top_count, input_grad, trans_grad,
@@ -63,8 +64,8 @@ void deform_psroi_pooling_backward(
         part_size, sample_per_part, trans_std
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }

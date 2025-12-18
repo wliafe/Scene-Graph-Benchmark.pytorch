@@ -14,11 +14,13 @@ at::Tensor ROIAlign_forward(const at::Tensor& input,
                             const int pooled_height,
                             const int pooled_width,
                             const int sampling_ratio) {
-  if (input.type().is_cuda()) {
+  // [修改 1] input.type().is_cuda() -> input.is_cuda()
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return ROIAlign_forward_cuda(input, rois, spatial_scale, pooled_height, pooled_width, sampling_ratio);
 #else
-    AT_ERROR("Not compiled with GPU support");
+    // [修改 2] AT_ERROR -> TORCH_CHECK
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
   return ROIAlign_forward_cpu(input, rois, spatial_scale, pooled_height, pooled_width, sampling_ratio);
@@ -34,13 +36,14 @@ at::Tensor ROIAlign_backward(const at::Tensor& grad,
                              const int height,
                              const int width,
                              const int sampling_ratio) {
-  if (grad.type().is_cuda()) {
+  // [修改 3] grad.type().is_cuda() -> grad.is_cuda()
+  if (grad.is_cuda()) {
 #ifdef WITH_CUDA
     return ROIAlign_backward_cuda(grad, rois, spatial_scale, pooled_height, pooled_width, batch_size, channels, height, width, sampling_ratio);
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  // [修改 4] AT_ERROR -> TORCH_CHECK
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
-

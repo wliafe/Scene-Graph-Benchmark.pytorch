@@ -7,7 +7,8 @@ from torch.nn.modules.utils import _pair
 
 from maskrcnn_benchmark import _C
 
-from apex import amp
+# [修改 1] 删除 apex 导入
+# from apex import amp
 
 class _ROIAlign(Function):
     @staticmethod
@@ -54,10 +55,16 @@ class ROIAlign(nn.Module):
         self.spatial_scale = spatial_scale
         self.sampling_ratio = sampling_ratio
 
-    @amp.float_function
+    # [修改 2] 删除装饰器 @amp.float_function
     def forward(self, input, rois):
+        # [修改 3] 显式将输入转为 float32
+        # 底层 C++ 扩展 (ROIAlign_cuda.cu) 只编译了 float/double，不支持 half (fp16)
         return roi_align(
-            input, rois, self.output_size, self.spatial_scale, self.sampling_ratio
+            input.float(), 
+            rois.float(), 
+            self.output_size, 
+            self.spatial_scale, 
+            self.sampling_ratio
         )
 
     def __repr__(self):

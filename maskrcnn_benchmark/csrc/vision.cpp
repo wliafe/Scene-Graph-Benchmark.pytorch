@@ -1,4 +1,7 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+// [修改 1] 必须包含 torch/extension.h 以支持 PYBIND11_MODULE 和 ATen 类型
+#include <torch/extension.h>
+
 #include "nms.h"
 #include "ROIAlign.h"
 #include "ROIPool.h"

@@ -12,7 +12,7 @@ at::Tensor SigmoidFocalLoss_forward_cuda(
 
 at::Tensor SigmoidFocalLoss_backward_cuda(
 			     const at::Tensor& logits,
-                             const at::Tensor& targets,
+                 const at::Tensor& targets,
 			     const at::Tensor& d_losses,
 			     const int num_classes,
 			     const float gamma,
@@ -38,10 +38,10 @@ at::Tensor ROIAlign_backward_cuda(const at::Tensor& grad,
 
 
 std::tuple<at::Tensor, at::Tensor> ROIPool_forward_cuda(const at::Tensor& input,
-                                const at::Tensor& rois,
-                                const float spatial_scale,
-                                const int pooled_height,
-                                const int pooled_width);
+                                     const at::Tensor& rois,
+                                     const float spatial_scale,
+                                     const int pooled_height,
+                                     const int pooled_width);
 
 at::Tensor ROIPool_backward_cuda(const at::Tensor& grad,
                                  const at::Tensor& input,

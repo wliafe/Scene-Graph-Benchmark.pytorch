@@ -6,6 +6,7 @@
 #include "cuda/vision.h"
 #endif
 
+// [Modified] Replaced AT_ERROR with TORCH_CHECK and input.type().is_cuda() with input.is_cuda()
 
 // Interface for Python
 int deform_conv_forward(
@@ -27,7 +28,7 @@ int deform_conv_forward(
     int deformable_group, 
     int im2col_step)
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return deform_conv_forward_cuda(
         input, weight, offset, output, columns, ones,
@@ -35,10 +36,10 @@ int deform_conv_forward(
         group, deformable_group, im2col_step
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 
@@ -62,7 +63,7 @@ int deform_conv_backward_input(
     int deformable_group, 
     int im2col_step)
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return deform_conv_backward_input_cuda(
         input, offset, gradOutput, gradInput, gradOffset, weight, columns,
@@ -70,10 +71,10 @@ int deform_conv_backward_input(
         group, deformable_group, im2col_step
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 
@@ -97,7 +98,7 @@ int deform_conv_backward_parameters(
     float scale, 
     int im2col_step)
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return deform_conv_backward_parameters_cuda(
         input, offset, gradOutput, gradWeight, columns, ones,
@@ -105,10 +106,10 @@ int deform_conv_backward_parameters(
         group, deformable_group, scale, im2col_step
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 
@@ -133,7 +134,7 @@ void modulated_deform_conv_forward(
     const int deformable_group,
     const bool with_bias)
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return modulated_deform_conv_cuda_forward(
         input, weight, bias, ones, offset, mask, output, columns,
@@ -142,10 +143,10 @@ void modulated_deform_conv_forward(
         group, deformable_group, with_bias
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 
@@ -175,7 +176,7 @@ void modulated_deform_conv_backward(
     int deformable_group,
     const bool with_bias)
 {
-  if (input.type().is_cuda()) {
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return modulated_deform_conv_cuda_backward(
         input, weight, bias, ones, offset, mask, columns, 
@@ -184,8 +185,8 @@ void modulated_deform_conv_backward(
         group, deformable_group, with_bias
     );
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }

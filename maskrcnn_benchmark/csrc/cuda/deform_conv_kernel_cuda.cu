@@ -1,68 +1,10 @@
-/*!
- ******************* BEGIN Caffe Copyright Notice and Disclaimer ****************
- *
- * COPYRIGHT
- *
- * All contributions by the University of California:
- * Copyright (c) 2014-2017 The Regents of the University of California (Regents)
- * All rights reserved.
- *
- * All other contributions:
- * Copyright (c) 2014-2017, the respective contributors
- * All rights reserved.
- *
- * Caffe uses a shared copyright model: each contributor holds copyright over
- * their contributions to Caffe. The project versioning records all such
- * contribution and copyright details. If a contributor wants to further mark
- * their specific copyright on a particular contribution, they should indicate
- * their copyright solely in the commit message of the change when it is
- * committed.
- *
- * LICENSE
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * CONTRIBUTION AGREEMENT
- *
- * By contributing to the BVLC/caffe repository through pull-request, comment,
- * or otherwise, the contributor releases their content to the
- * license and copyright terms herein.
- *
- ***************** END Caffe Copyright Notice and Disclaimer ********************
- *
- * Copyright (c) 2018 Microsoft
- * Licensed under The MIT License [see LICENSE for details]
- * \file modulated_deformable_im2col.cuh
- * \brief Function definitions of converting an image to
- * column matrix based on kernel, padding, dilation, and offset.
- * These functions are mainly used in deformable convolution operators.
- * \ref: https://arxiv.org/abs/1703.06211
- * \author Yuwen Xiong, Haozhi Qi, Jifeng Dai, Xizhou Zhu, Han Hu, Dazhi Cheng
- */
-
-// modify from https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch/blob/mmdetection/mmdet/ops/dcn/src/deform_conv_cuda_kernel.cu
-
-
 #include <ATen/ATen.h>
-#include <THC/THCAtomics.cuh>
+#include <ATen/cuda/CUDAContext.h>
+// [修改 1] 移除旧的 THC 原子操作头文件
+// #include <THC/THCAtomics.cuh>
+// [修改 2] 引入新的 ATen 原子操作头文件
+#include <ATen/cuda/Atomic.cuh>
+
 #include <stdio.h>
 #include <math.h>
 #include <float.h>
@@ -79,14 +21,6 @@ inline int GET_BLOCKS(const int N)
 {
   return std::min(kMaxGridNum, (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS);
 }
-
-/*
-const int CUDA_NUM_THREADS = 1024;
-
-inline int GET_BLOCKS(const int N)
-{
-  return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
-}*/
 
 template <typename scalar_t>
 __device__ scalar_t deformable_im2col_bilinear(const scalar_t *bottom_data, const int data_width,
@@ -264,10 +198,10 @@ void deformable_im2col(
   int channel_per_deformable_group = channels / deformable_group;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_im.type(), "deformable_im2col_gpu", ([&] {
-        const scalar_t *data_im_ = data_im.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        scalar_t *data_col_ = data_col.data<scalar_t>();
+      data_im.scalar_type(), "deformable_im2col_gpu", ([&] {
+        const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
 
         deformable_im2col_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_im_, data_offset_, height, width, ksize_h, ksize_w,
@@ -327,14 +261,16 @@ __global__ void deformable_col2im_gpu_kernel(
     {
       for (int dx = -2; dx <= 2; dx++)
       {
+        // [修改 3] abs() -> std::abs() 以避免浮点截断问题
         if (cur_h + dy >= 0 && cur_h + dy < height &&
             cur_w + dx >= 0 && cur_w + dx < width &&
-            abs(cur_inv_h_data - (cur_h + dy)) < 1 &&
-            abs(cur_inv_w_data - (cur_w + dx)) < 1)
+            std::abs(cur_inv_h_data - (cur_h + dy)) < 1 &&
+            std::abs(cur_inv_w_data - (cur_w + dx)) < 1)
         {
           int cur_bottom_grad_pos = ((b * channels + c) * height + cur_h + dy) * width + cur_w + dx;
           scalar_t weight = get_gradient_weight(cur_inv_h_data, cur_inv_w_data, cur_h + dy, cur_w + dx, height, width);
-          atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
+          // [修改 4] atomicAdd -> gpuAtomicAdd (ATen 兼容性修改)
+          gpuAtomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
         }
       }
     }
@@ -358,10 +294,10 @@ void deformable_col2im(
   int channel_per_deformable_group = channels / deformable_group;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_col.type(), "deformable_col2im_gpu", ([&] {
-        const scalar_t *data_col_ = data_col.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        scalar_t *grad_im_ = grad_im.data<scalar_t>();
+      data_col.scalar_type(), "deformable_col2im_gpu", ([&] {
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        scalar_t *grad_im_ = grad_im.data_ptr<scalar_t>();
 
         deformable_col2im_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_col_, data_offset_, channels, height, width, ksize_h,
@@ -456,11 +392,11 @@ void deformable_col2im_coord(
   int channel_per_deformable_group = channels * ksize_h * ksize_w / deformable_group;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_col.type(), "deformable_col2im_coord_gpu", ([&] {
-        const scalar_t *data_col_ = data_col.data<scalar_t>();
-        const scalar_t *data_im_ = data_im.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        scalar_t *grad_offset_ = grad_offset.data<scalar_t>();
+      data_col.scalar_type(), "deformable_col2im_coord_gpu", ([&] {
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
+        const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        scalar_t *grad_offset_ = grad_offset.data_ptr<scalar_t>();
 
         deformable_col2im_coord_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_col_, data_im_, data_offset_, channels, height, width,
@@ -685,14 +621,16 @@ __global__ void modulated_deformable_col2im_gpu_kernel(const int n,
     {
       for (int dx = -2; dx <= 2; dx++)
       {
+        // [修改 5] abs() -> std::abs()
         if (cur_h + dy >= 0 && cur_h + dy < height &&
             cur_w + dx >= 0 && cur_w + dx < width &&
-            abs(cur_inv_h_data - (cur_h + dy)) < 1 &&
-            abs(cur_inv_w_data - (cur_w + dx)) < 1)
+            std::abs(cur_inv_h_data - (cur_h + dy)) < 1 &&
+            std::abs(cur_inv_w_data - (cur_w + dx)) < 1)
         {
           int cur_bottom_grad_pos = ((b * channels + c) * height + cur_h + dy) * width + cur_w + dx;
           scalar_t weight = dmcn_get_gradient_weight(cur_inv_h_data, cur_inv_w_data, cur_h + dy, cur_w + dx, height, width);
-          atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
+          // [修改 6] atomicAdd -> gpuAtomicAdd
+          gpuAtomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
         }
       }
     }
@@ -786,11 +724,11 @@ void modulated_deformable_im2col_cuda(
   const int num_kernels = channels * batch_size * height_col * width_col;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_im.type(), "modulated_deformable_im2col_gpu", ([&] {
-        const scalar_t *data_im_ = data_im.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        const scalar_t *data_mask_ = data_mask.data<scalar_t>();
-        scalar_t *data_col_ = data_col.data<scalar_t>();
+      data_im.scalar_type(), "modulated_deformable_im2col_gpu", ([&] {
+        const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        const scalar_t *data_mask_ = data_mask.data_ptr<scalar_t>();
+        scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
 
         modulated_deformable_im2col_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_im_, data_offset_, data_mask_, height_im, width_im, kernel_h, kenerl_w,
@@ -818,11 +756,11 @@ void modulated_deformable_col2im_cuda(
   const int num_kernels = channels * kernel_h * kernel_w * batch_size * height_col * width_col;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_col.type(), "modulated_deformable_col2im_gpu", ([&] {
-        const scalar_t *data_col_ = data_col.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        const scalar_t *data_mask_ = data_mask.data<scalar_t>();
-        scalar_t *grad_im_ = grad_im.data<scalar_t>();
+      data_col.scalar_type(), "modulated_deformable_col2im_gpu", ([&] {
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        const scalar_t *data_mask_ = data_mask.data_ptr<scalar_t>();
+        scalar_t *grad_im_ = grad_im.data_ptr<scalar_t>();
 
         modulated_deformable_col2im_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_col_, data_offset_, data_mask_, channels, height_im, width_im,
@@ -851,13 +789,13 @@ void modulated_deformable_col2im_coord_cuda(
   const int channel_per_deformable_group = channels * kernel_h * kernel_w / deformable_group;
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      data_col.type(), "modulated_deformable_col2im_coord_gpu", ([&] {
-        const scalar_t *data_col_ = data_col.data<scalar_t>();
-        const scalar_t *data_im_ = data_im.data<scalar_t>();
-        const scalar_t *data_offset_ = data_offset.data<scalar_t>();
-        const scalar_t *data_mask_ = data_mask.data<scalar_t>();
-        scalar_t *grad_offset_ = grad_offset.data<scalar_t>();
-        scalar_t *grad_mask_ = grad_mask.data<scalar_t>();
+      data_col.scalar_type(), "modulated_deformable_col2im_coord_gpu", ([&] {
+        const scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
+        const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
+        const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
+        const scalar_t *data_mask_ = data_mask.data_ptr<scalar_t>();
+        scalar_t *grad_offset_ = grad_offset.data_ptr<scalar_t>();
+        scalar_t *grad_mask_ = grad_mask.data_ptr<scalar_t>();
 
         modulated_deformable_col2im_coord_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
             num_kernels, data_col_, data_im_, data_offset_, data_mask_, channels, height_im, width_im,

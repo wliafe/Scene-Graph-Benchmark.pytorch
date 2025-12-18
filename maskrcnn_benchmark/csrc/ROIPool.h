@@ -13,14 +13,16 @@ std::tuple<at::Tensor, at::Tensor> ROIPool_forward(const at::Tensor& input,
                                 const float spatial_scale,
                                 const int pooled_height,
                                 const int pooled_width) {
-  if (input.type().is_cuda()) {
+  // [修改 1] input.type().is_cuda() -> input.is_cuda()
+  if (input.is_cuda()) {
 #ifdef WITH_CUDA
     return ROIPool_forward_cuda(input, rois, spatial_scale, pooled_height, pooled_width);
 #else
-    AT_ERROR("Not compiled with GPU support");
+    // [修改 2] AT_ERROR -> TORCH_CHECK
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
 
 at::Tensor ROIPool_backward(const at::Tensor& grad,
@@ -34,15 +36,13 @@ at::Tensor ROIPool_backward(const at::Tensor& grad,
                                  const int channels,
                                  const int height,
                                  const int width) {
-  if (grad.type().is_cuda()) {
+  // [修改 3] grad.type().is_cuda() -> grad.is_cuda()
+  if (grad.is_cuda()) {
 #ifdef WITH_CUDA
     return ROIPool_backward_cuda(grad, input, rois, argmax, spatial_scale, pooled_height, pooled_width, batch_size, channels, height, width);
 #else
-    AT_ERROR("Not compiled with GPU support");
+    TORCH_CHECK(false, "Not compiled with GPU support");
 #endif
   }
-  AT_ERROR("Not implemented on the CPU");
+  TORCH_CHECK(false, "Not implemented on the CPU");
 }
-
-
-

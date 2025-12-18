@@ -5,21 +5,18 @@
 // author: Charles Shang
 // https://github.com/torch/cunn/blob/master/lib/THCUNN/generic/SpatialConvolutionMM.cu
 
-#ifndef AT_CHECK
-#define AT_CHECK TORCH_CHECK 
-#endif
-
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
-#include <THC/THCDeviceUtils.cuh>
+// [修改 1] 移除废弃的 THC 头文件
+// #include <THC/THC.h>
+// #include <THC/THCDeviceUtils.cuh>
 
 #include <vector>
 #include <iostream>
 #include <cmath>
 
-
+// 声明外部 CUDA Kernel 函数
 void DeformablePSROIPoolForward(
     const at::Tensor data, const at::Tensor bbox, const at::Tensor trans,
     at::Tensor out, at::Tensor top_count, const int batch, const int channels,
@@ -43,7 +40,8 @@ void deform_psroi_pooling_cuda_forward(
     const int output_dim, const int group_size, const int pooled_size,
     const int part_size, const int sample_per_part, const float trans_std) 
 {
-  AT_CHECK(input.is_contiguous(), "input tensor has to be contiguous");
+  // [修改 2] AT_CHECK -> TORCH_CHECK
+  TORCH_CHECK(input.is_contiguous(), "input tensor has to be contiguous");
 
   const int batch = input.size(0);
   const int channels = input.size(1);
@@ -53,7 +51,8 @@ void deform_psroi_pooling_cuda_forward(
 
   const int num_bbox = bbox.size(0);
   if (num_bbox != out.size(0))
-    AT_ERROR("Output shape and bbox number wont match: (%d vs %d).",
+    // [修改 3] AT_ERROR -> TORCH_CHECK
+    TORCH_CHECK(false, "Output shape and bbox number wont match: (%d vs %d).",
              out.size(0), num_bbox);
 
   DeformablePSROIPoolForward(
@@ -69,8 +68,9 @@ void deform_psroi_pooling_cuda_backward(
     const int group_size, const int pooled_size, const int part_size,
     const int sample_per_part, const float trans_std) 
 {
-  AT_CHECK(out_grad.is_contiguous(), "out_grad tensor has to be contiguous");
-  AT_CHECK(input.is_contiguous(), "input tensor has to be contiguous");
+  // [修改 4] AT_CHECK -> TORCH_CHECK
+  TORCH_CHECK(out_grad.is_contiguous(), "out_grad tensor has to be contiguous");
+  TORCH_CHECK(input.is_contiguous(), "input tensor has to be contiguous");
 
   const int batch = input.size(0);
   const int channels = input.size(1);
@@ -80,7 +80,8 @@ void deform_psroi_pooling_cuda_backward(
 
   const int num_bbox = bbox.size(0);
   if (num_bbox != out_grad.size(0))
-    AT_ERROR("Output shape and bbox number wont match: (%d vs %d).",
+    // [修改 5] AT_ERROR -> TORCH_CHECK
+    TORCH_CHECK(false, "Output shape and bbox number wont match: (%d vs %d).",
              out_grad.size(0), num_bbox);
 
   DeformablePSROIPoolBackwardAcc(

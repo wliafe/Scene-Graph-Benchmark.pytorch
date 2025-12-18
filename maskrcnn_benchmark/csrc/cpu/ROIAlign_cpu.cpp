@@ -147,10 +147,6 @@ void ROIAlignForward_cpu_kernel(
     T roi_start_h = offset_bottom_rois[1] * spatial_scale;
     T roi_end_w = offset_bottom_rois[2] * spatial_scale;
     T roi_end_h = offset_bottom_rois[3] * spatial_scale;
-    // T roi_start_w = round(offset_bottom_rois[0] * spatial_scale);
-    // T roi_start_h = round(offset_bottom_rois[1] * spatial_scale);
-    // T roi_end_w = round(offset_bottom_rois[2] * spatial_scale);
-    // T roi_end_h = round(offset_bottom_rois[3] * spatial_scale);
 
     // Force malformed ROIs to be 1x1
     T roi_width = std::max(roi_end_w - roi_start_w, (T)1.);
@@ -224,8 +220,9 @@ at::Tensor ROIAlign_forward_cpu(const at::Tensor& input,
                                 const int pooled_height,
                                 const int pooled_width,
                                 const int sampling_ratio) {
-  AT_ASSERTM(!input.type().is_cuda(), "input must be a CPU tensor");
-  AT_ASSERTM(!rois.type().is_cuda(), "rois must be a CPU tensor");
+  // [修改 1] AT_ASSERTM -> TORCH_CHECK, .type().is_cuda() -> .is_cuda()
+  TORCH_CHECK(!input.is_cuda(), "input must be a CPU tensor");
+  TORCH_CHECK(!rois.is_cuda(), "rois must be a CPU tensor");
 
   auto num_rois = rois.size(0);
   auto channels = input.size(1);
@@ -239,10 +236,11 @@ at::Tensor ROIAlign_forward_cpu(const at::Tensor& input,
     return output;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(input.type(), "ROIAlign_forward", [&] {
+  // [修改 2] .type() -> .scalar_type()
+  AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "ROIAlign_forward", [&] {
     ROIAlignForward_cpu_kernel<scalar_t>(
          output_size,
-         input.data<scalar_t>(),
+         input.data_ptr<scalar_t>(),
          spatial_scale,
          channels,
          height,
@@ -250,8 +248,8 @@ at::Tensor ROIAlign_forward_cpu(const at::Tensor& input,
          pooled_height,
          pooled_width,
          sampling_ratio,
-         rois.data<scalar_t>(),
-         output.data<scalar_t>());
+         rois.data_ptr<scalar_t>(),
+         output.data_ptr<scalar_t>());
   });
   return output;
 }

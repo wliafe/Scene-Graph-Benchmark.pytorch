@@ -1,0 +1,22 @@
+name: scene_graph_benchmark
+channels:
+  - defaults
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.13.11
+  - cuda-nvcc=12.8.93
+  - gxx_linux-64=12.4.0
+  - sysroot_linux-64=2.34
+  - pip:
+      - h5py==3.15.1
+      - ipython==9.8.0
+      - matplotlib==3.10.8
+      - ninja==1.13.0
+      - numpy==2.2.6
+      - opencv-python==4.12.0.88
+      - overrides==7.7.0
+      - pycocotools==2.0.11
+      - scipy==1.16.3
+      - tqdm==4.67.1
+      - yacs==0.1.8

@@ -2,9 +2,18 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
-#include <THC/THCAtomics.cuh>
-#include <THC/THCDeviceUtils.cuh>
+// [修改 1] 移除 THC 头文件
+// #include <THC/THC.h>
+// #include <THC/THCAtomics.cuh>
+// #include <THC/THCDeviceUtils.cuh>
+
+// [修改 2] 引入 ATen 原子操作
+#include <ATen/cuda/Atomic.cuh>
+
+// [修改 3] 自定义 ceil_div 替代 THCCeilDiv
+inline long ceil_div(long n, long m) {
+  return (n + m - 1) / m;
+}
 
 // TODO make it in a common file
 #define CUDA_1D_KERNEL_LOOP(i, n)                            \
@@ -83,10 +92,6 @@ __global__ void RoIAlignForward(const int nthreads, const T* bottom_data,
     T roi_start_h = offset_bottom_rois[2] * spatial_scale;
     T roi_end_w = offset_bottom_rois[3] * spatial_scale;
     T roi_end_h = offset_bottom_rois[4] * spatial_scale;
-    // T roi_start_w = round(offset_bottom_rois[1] * spatial_scale);
-    // T roi_start_h = round(offset_bottom_rois[2] * spatial_scale);
-    // T roi_end_w = round(offset_bottom_rois[3] * spatial_scale);
-    // T roi_end_h = round(offset_bottom_rois[4] * spatial_scale);
 
     // Force malformed ROIs to be 1x1
     T roi_width = max(roi_end_w - roi_start_w, (T)1.);
@@ -162,13 +167,6 @@ __device__ void bilinear_interpolate_gradient(
   T lx = x - x_low;
   T hy = 1. - ly, hx = 1. - lx;
 
-  // reference in forward
-  // T v1 = bottom_data[y_low * width + x_low];
-  // T v2 = bottom_data[y_low * width + x_high];
-  // T v3 = bottom_data[y_high * width + x_low];
-  // T v4 = bottom_data[y_high * width + x_high];
-  // T val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
-
   w1 = hy * hx, w2 = hy * lx, w3 = ly * hx, w4 = ly * lx;
 
   return;
@@ -197,10 +195,6 @@ __global__ void RoIAlignBackwardFeature(const int nthreads, const T* top_diff,
     T roi_start_h = offset_bottom_rois[2] * spatial_scale;
     T roi_end_w = offset_bottom_rois[3] * spatial_scale;
     T roi_end_h = offset_bottom_rois[4] * spatial_scale;
-    // T roi_start_w = round(offset_bottom_rois[1] * spatial_scale);
-    // T roi_start_h = round(offset_bottom_rois[2] * spatial_scale);
-    // T roi_end_w = round(offset_bottom_rois[3] * spatial_scale);
-    // T roi_end_h = round(offset_bottom_rois[4] * spatial_scale);
 
     // Force malformed ROIs to be 1x1
     T roi_width = max(roi_end_w - roi_start_w, (T)1.);
@@ -243,10 +237,11 @@ __global__ void RoIAlignBackwardFeature(const int nthreads, const T* top_diff,
 
         if (x_low >= 0 && x_high >= 0 && y_low >= 0 && y_high >= 0)
         {
-          atomicAdd(offset_bottom_diff + y_low * width + x_low, static_cast<T>(g1));
-          atomicAdd(offset_bottom_diff + y_low * width + x_high, static_cast<T>(g2));
-          atomicAdd(offset_bottom_diff + y_high * width + x_low, static_cast<T>(g3));
-          atomicAdd(offset_bottom_diff + y_high * width + x_high, static_cast<T>(g4));
+          // [修改 4] atomicAdd -> gpuAtomicAdd
+          gpuAtomicAdd(offset_bottom_diff + y_low * width + x_low, static_cast<T>(g1));
+          gpuAtomicAdd(offset_bottom_diff + y_low * width + x_high, static_cast<T>(g2));
+          gpuAtomicAdd(offset_bottom_diff + y_high * width + x_low, static_cast<T>(g3));
+          gpuAtomicAdd(offset_bottom_diff + y_high * width + x_high, static_cast<T>(g4));
         } // if
       } // ix
     } // iy
@@ -260,8 +255,9 @@ at::Tensor ROIAlign_forward_cuda(const at::Tensor& input,
                                  const int pooled_height,
                                  const int pooled_width,
                                  const int sampling_ratio) {
-  AT_ASSERTM(input.type().is_cuda(), "input must be a CUDA tensor");
-  AT_ASSERTM(rois.type().is_cuda(), "rois must be a CUDA tensor");
+  // [修改 5] AT_ASSERTM -> TORCH_CHECK
+  TORCH_CHECK(input.is_cuda(), "input must be a CUDA tensor");
+  TORCH_CHECK(rois.is_cuda(), "rois must be a CUDA tensor");
 
   auto num_rois = rois.size(0);
   auto channels = input.size(1);
@@ -272,18 +268,21 @@ at::Tensor ROIAlign_forward_cuda(const at::Tensor& input,
   auto output_size = num_rois * pooled_height * pooled_width * channels;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-  dim3 grid(std::min(THCCeilDiv((long)output_size, 512L), 4096L));
+  // [修改 6] THCCeilDiv -> ceil_div
+  dim3 grid(std::min(ceil_div((long)output_size, 512L), 4096L));
   dim3 block(512);
 
   if (output.numel() == 0) {
-    THCudaCheck(cudaGetLastError());
+    // [修改 7] 简化错误检查
+    cudaGetLastError();
     return output;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(input.type(), "ROIAlign_forward", [&] {
+  // [修改 8] input.type() -> input.scalar_type()
+  AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "ROIAlign_forward", [&] {
     RoIAlignForward<scalar_t><<<grid, block, 0, stream>>>(
          output_size,
-         input.contiguous().data<scalar_t>(),
+         input.contiguous().data_ptr<scalar_t>(),
          spatial_scale,
          channels,
          height,
@@ -294,7 +293,7 @@ at::Tensor ROIAlign_forward_cuda(const at::Tensor& input,
          rois.contiguous().data<scalar_t>(),
          output.data<scalar_t>());
   });
-  THCudaCheck(cudaGetLastError());
+  cudaGetLastError();
   return output;
 }
 
@@ -309,24 +308,24 @@ at::Tensor ROIAlign_backward_cuda(const at::Tensor& grad,
                                   const int height,
                                   const int width,
                                   const int sampling_ratio) {
-  AT_ASSERTM(grad.type().is_cuda(), "grad must be a CUDA tensor");
-  AT_ASSERTM(rois.type().is_cuda(), "rois must be a CUDA tensor");
+  TORCH_CHECK(grad.is_cuda(), "grad must be a CUDA tensor");
+  TORCH_CHECK(rois.is_cuda(), "rois must be a CUDA tensor");
 
   auto num_rois = rois.size(0);
   auto grad_input = at::zeros({batch_size, channels, height, width}, grad.options());
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-  dim3 grid(std::min(THCCeilDiv((long)grad.numel(), 512L), 4096L));
+  dim3 grid(std::min(ceil_div((long)grad.numel(), 512L), 4096L));
   dim3 block(512);
 
   // handle possibly empty gradients
   if (grad.numel() == 0) {
-    THCudaCheck(cudaGetLastError());
+    cudaGetLastError();
     return grad_input;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(grad.type(), "ROIAlign_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES(grad.scalar_type(), "ROIAlign_backward", [&] {
     RoIAlignBackwardFeature<scalar_t><<<grid, block, 0, stream>>>(
          grad.numel(),
          grad.contiguous().data<scalar_t>(),
@@ -341,6 +340,6 @@ at::Tensor ROIAlign_backward_cuda(const at::Tensor& grad,
          grad_input.data<scalar_t>(),
          rois.contiguous().data<scalar_t>());
   });
-  THCudaCheck(cudaGetLastError());
+  cudaGetLastError();
   return grad_input;
 }

@@ -7,7 +7,8 @@ from torch.nn.modules.utils import _pair
 
 from maskrcnn_benchmark import _C
 
-from apex import amp
+# [修改 1] 删除 apex 导入
+# from apex import amp
 
 class _ROIPool(Function):
     @staticmethod
@@ -53,9 +54,15 @@ class ROIPool(nn.Module):
         self.output_size = output_size
         self.spatial_scale = spatial_scale
 
-    @amp.float_function
+    # [修改 2] 删除 @amp.float_function 装饰器
     def forward(self, input, rois):
-        return roi_pool(input, rois, self.output_size, self.spatial_scale)
+        # [修改 3] 显式转为 float32，因为底层 CUDA 实现不支持半精度
+        return roi_pool(
+            input.float(), 
+            rois.float(), 
+            self.output_size, 
+            self.spatial_scale
+        )
 
     def __repr__(self):
         tmpstr = self.__class__.__name__ + "("

@@ -2,10 +2,19 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
-#include <THC/THCAtomics.cuh>
-#include <THC/THCDeviceUtils.cuh>
+// [修改 1] 移除 THC 头文件
+// #include <THC/THC.h>
+// #include <THC/THCAtomics.cuh>
+// #include <THC/THCDeviceUtils.cuh>
 
+// [修改 2] 引入 ATen 原子操作和 float常量
+#include <ATen/cuda/Atomic.cuh>
+#include <cfloat> 
+
+// [修改 3] 自定义 ceil_div
+inline long ceil_div(long n, long m) {
+  return (n + m - 1) / m;
+}
 
 // TODO make it in a common file
 #define CUDA_1D_KERNEL_LOOP(i, n)                            \
@@ -36,9 +45,9 @@ __global__ void RoIPoolFForward(const int nthreads, const T* bottom_data,
     int roi_width = max(roi_end_w - roi_start_w + 1, 1);
     int roi_height = max(roi_end_h - roi_start_h + 1, 1);
     T bin_size_h = static_cast<T>(roi_height)
-                       / static_cast<T>(pooled_height);
+                        / static_cast<T>(pooled_height);
     T bin_size_w = static_cast<T>(roi_width)
-                       / static_cast<T>(pooled_width);
+                        / static_cast<T>(pooled_width);
 
     int hstart = static_cast<int>(floor(static_cast<T>(ph)
                                         * bin_size_h));
@@ -99,7 +108,8 @@ __global__ void RoIPoolFBackward(const int nthreads, const T* top_diff,
 
     int argmax = offset_argmax_data[ph * pooled_width + pw];
     if (argmax != -1) {
-      atomicAdd(
+      // [修改 4] atomicAdd -> gpuAtomicAdd
+      gpuAtomicAdd(
           offset_bottom_diff + argmax,
           static_cast<T>(offset_top_diff[ph * pooled_width + pw]));
 
@@ -112,8 +122,9 @@ std::tuple<at::Tensor, at::Tensor> ROIPool_forward_cuda(const at::Tensor& input,
                                 const float spatial_scale,
                                 const int pooled_height,
                                 const int pooled_width) {
-  AT_ASSERTM(input.type().is_cuda(), "input must be a CUDA tensor");
-  AT_ASSERTM(rois.type().is_cuda(), "rois must be a CUDA tensor");
+  // [修改 5] AT_ASSERTM -> TORCH_CHECK
+  TORCH_CHECK(input.is_cuda(), "input must be a CUDA tensor");
+  TORCH_CHECK(rois.is_cuda(), "rois must be a CUDA tensor");
 
   auto num_rois = rois.size(0);
   auto channels = input.size(1);
@@ -126,29 +137,31 @@ std::tuple<at::Tensor, at::Tensor> ROIPool_forward_cuda(const at::Tensor& input,
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-  dim3 grid(std::min(THCCeilDiv((long)output_size, 512L), 4096L));
+  // [修改 6] THCCeilDiv -> ceil_div
+  dim3 grid(std::min(ceil_div((long)output_size, 512L), 4096L));
   dim3 block(512);
 
   if (output.numel() == 0) {
-    THCudaCheck(cudaGetLastError());
+    cudaGetLastError();
     return std::make_tuple(output, argmax);
   }
 
-  AT_DISPATCH_FLOATING_TYPES(input.type(), "ROIPool_forward", [&] {
+  // [修改 7] input.type() -> input.scalar_type()
+  AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "ROIPool_forward", [&] {
     RoIPoolFForward<scalar_t><<<grid, block, 0, stream>>>(
          output_size,
-         input.contiguous().data<scalar_t>(),
+         input.contiguous().data_ptr<scalar_t>(),
          spatial_scale,
          channels,
          height,
          width,
          pooled_height,
          pooled_width,
-         rois.contiguous().data<scalar_t>(),
-         output.data<scalar_t>(),
-         argmax.data<int>());
+         rois.contiguous().data_ptr<scalar_t>(),
+         output.data_ptr<scalar_t>(),
+         argmax.data_ptr<int>());
   });
-  THCudaCheck(cudaGetLastError());
+  cudaGetLastError();
   return std::make_tuple(output, argmax);
 }
 
@@ -164,8 +177,8 @@ at::Tensor ROIPool_backward_cuda(const at::Tensor& grad,
                                  const int channels,
                                  const int height,
                                  const int width) {
-  AT_ASSERTM(grad.type().is_cuda(), "grad must be a CUDA tensor");
-  AT_ASSERTM(rois.type().is_cuda(), "rois must be a CUDA tensor");
+  TORCH_CHECK(grad.is_cuda(), "grad must be a CUDA tensor");
+  TORCH_CHECK(rois.is_cuda(), "rois must be a CUDA tensor");
   // TODO add more checks
 
   auto num_rois = rois.size(0);
@@ -173,20 +186,20 @@ at::Tensor ROIPool_backward_cuda(const at::Tensor& grad,
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
-  dim3 grid(std::min(THCCeilDiv((long)grad.numel(), 512L), 4096L));
+  dim3 grid(std::min(ceil_div((long)grad.numel(), 512L), 4096L));
   dim3 block(512);
 
   // handle possibly empty gradients
   if (grad.numel() == 0) {
-    THCudaCheck(cudaGetLastError());
+    cudaGetLastError();
     return grad_input;
   }
 
-  AT_DISPATCH_FLOATING_TYPES(grad.type(), "ROIPool_backward", [&] {
+  AT_DISPATCH_FLOATING_TYPES(grad.scalar_type(), "ROIPool_backward", [&] {
     RoIPoolFBackward<scalar_t><<<grid, block, 0, stream>>>(
          grad.numel(),
-         grad.contiguous().data<scalar_t>(),
-         argmax.data<int>(),
+         grad.contiguous().data_ptr<scalar_t>(),
+         argmax.data_ptr<int>(),
          num_rois,
          spatial_scale,
          channels,
@@ -194,9 +207,9 @@ at::Tensor ROIPool_backward_cuda(const at::Tensor& grad,
          width,
          pooled_height,
          pooled_width,
-         grad_input.data<scalar_t>(),
-         rois.contiguous().data<scalar_t>());
+         grad_input.data_ptr<scalar_t>(),
+         rois.contiguous().data_ptr<scalar_t>());
   });
-  THCudaCheck(cudaGetLastError());
+  cudaGetLastError();
   return grad_input;
 }

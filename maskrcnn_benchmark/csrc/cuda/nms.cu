@@ -2,11 +2,17 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include <THC/THC.h>
-#include <THC/THCDeviceUtils.cuh>
+// [修改 1] 移除 THC 头文件
+// #include <THC/THC.h>
+// #include <THC/THCDeviceUtils.cuh>
 
 #include <vector>
 #include <iostream>
+
+// [修改 2] 定义 ceil_div 替代 THCCeilDiv
+__host__ __device__ inline int ceil_div(int n, int m) {
+  return (n + m - 1) / m;
+}
 
 int const threadsPerBlock = sizeof(unsigned long long) * 8;
 
@@ -61,7 +67,8 @@ __global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh,
         t |= 1ULL << i;
       }
     }
-    const int col_blocks = THCCeilDiv(n_boxes, threadsPerBlock);
+    // [修改 3] THCCeilDiv -> ceil_div
+    const int col_blocks = ceil_div(n_boxes, threadsPerBlock);
     dev_mask[cur_box_idx * col_blocks + col_start] = t;
   }
 }
@@ -69,44 +76,57 @@ __global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh,
 // boxes is a N x 5 tensor
 at::Tensor nms_cuda(const at::Tensor boxes, float nms_overlap_thresh) {
   using scalar_t = float;
-  AT_ASSERTM(boxes.type().is_cuda(), "boxes must be a CUDA tensor");
+  // [修改 4] AT_ASSERTM -> TORCH_CHECK
+  TORCH_CHECK(boxes.is_cuda(), "boxes must be a CUDA tensor");
+  
   auto scores = boxes.select(1, 4);
   auto order_t = std::get<1>(scores.sort(0, /* descending=*/true));
   auto boxes_sorted = boxes.index_select(0, order_t);
 
   int boxes_num = boxes.size(0);
 
-  const int col_blocks = THCCeilDiv(boxes_num, threadsPerBlock);
+  // [修改 5] THCCeilDiv -> ceil_div
+  const int col_blocks = ceil_div(boxes_num, threadsPerBlock);
 
-  scalar_t* boxes_dev = boxes_sorted.data<scalar_t>();
+  scalar_t* boxes_dev = boxes_sorted.data_ptr<scalar_t>();
 
-  THCState *state = at::globalContext().lazyInitCUDA(); // TODO replace with getTHCState
+  // [修改 6] 移除 THCState 和 THCudaMalloc
+  // THCState *state = at::globalContext().lazyInitCUDA(); 
+  
+  // 使用 at::empty 创建 Tensor 来替代手动 malloc，自动管理显存
+  // unsigned long long 和 int64_t 大小相同 (8 bytes)，可以用 at::kLong 存储
+  at::Tensor mask = at::empty({boxes_num * col_blocks}, boxes.options().dtype(at::kLong));
+  unsigned long long* mask_dev = (unsigned long long*)mask.data_ptr<int64_t>();
 
-  unsigned long long* mask_dev = NULL;
-  //THCudaCheck(THCudaMalloc(state, (void**) &mask_dev,
-  //                      boxes_num * col_blocks * sizeof(unsigned long long)));
-
-  mask_dev = (unsigned long long*) THCudaMalloc(state, boxes_num * col_blocks * sizeof(unsigned long long));
-
-  dim3 blocks(THCCeilDiv(boxes_num, threadsPerBlock),
-              THCCeilDiv(boxes_num, threadsPerBlock));
+  dim3 blocks(ceil_div(boxes_num, threadsPerBlock),
+              ceil_div(boxes_num, threadsPerBlock));
   dim3 threads(threadsPerBlock);
-  nms_kernel<<<blocks, threads>>>(boxes_num,
+  
+  // 获取当前 CUDA 流（推荐做法，虽然这里不加也行，因为 cudaMemcpy 是同步的）
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  
+  nms_kernel<<<blocks, threads, 0, stream>>>(boxes_num,
                                   nms_overlap_thresh,
                                   boxes_dev,
                                   mask_dev);
 
   std::vector<unsigned long long> mask_host(boxes_num * col_blocks);
-  THCudaCheck(cudaMemcpy(&mask_host[0],
+  
+  // [修改 7] THCudaCheck -> 简单的 CUDA 检查 (或者依靠 PyTorch 的 CUDA 异常机制)
+  // 注意：cudaMemcpy 默认是同步的，会等待 Kernel 执行完毕
+  cudaError_t err = cudaMemcpy(&mask_host[0],
                         mask_dev,
                         sizeof(unsigned long long) * boxes_num * col_blocks,
-                        cudaMemcpyDeviceToHost));
+                        cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+      printf("error in nms_cuda: %s\n", cudaGetErrorString(err));
+  }
 
   std::vector<unsigned long long> remv(col_blocks);
   memset(&remv[0], 0, sizeof(unsigned long long) * col_blocks);
 
   at::Tensor keep = at::empty({boxes_num}, boxes.options().dtype(at::kLong).device(at::kCPU));
-  int64_t* keep_out = keep.data<int64_t>();
+  int64_t* keep_out = keep.data_ptr<int64_t>();
 
   int num_to_keep = 0;
   for (int i = 0; i < boxes_num; i++) {
@@ -122,8 +142,9 @@ at::Tensor nms_cuda(const at::Tensor boxes, float nms_overlap_thresh) {
     }
   }
 
-  THCudaFree(state, mask_dev);
-  // TODO improve this part
+  // [修改 8] 不需要 THCudaFree，mask Tensor 超出作用域会自动释放
+  // THCudaFree(state, mask_dev);
+
   return std::get<0>(order_t.index({
                        keep.narrow(/*dim=*/0, /*start=*/0, /*length=*/num_to_keep).to(
                          order_t.device(), keep.scalar_type())
