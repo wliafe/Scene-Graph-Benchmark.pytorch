@@ -5,6 +5,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.13.11
+  - pip=25.3
   - cuda-nvcc=12.8.93
   - gxx_linux-64=12.4.0
   - sysroot_linux-64=2.34
