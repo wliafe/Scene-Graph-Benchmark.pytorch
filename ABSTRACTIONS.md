@@ -1,8 +1,10 @@
 ## Abstractions
+
 The main abstractions introduced by `maskrcnn_benchmark` that are useful to
 have in mind are the following:
 
 ### ImageList
+
 In PyTorch, the first dimension of the input to the network generally represents
 the batch dimension, and thus all elements of the same batch have the same
 height / width.
@@ -26,11 +28,13 @@ batched_images_32 = to_image_list(images, size_divisible=32)
 ```
 
 ### BoxList
+
 The `BoxList` class holds a set of bounding boxes (represented as a `Nx4` tensor) for
 a specific image, as well as the size of the image as a `(width, height)` tuple.
 It also contains a set of methods that allow to perform geometric
 transformations to the bounding boxes (such as cropping, scaling and flipping).
 The class accepts bounding boxes from two different input formats:
+
 - `xyxy`, where each box is encoded as a `x1`, `y1`, `x2` and `y2` coordinates, and
 - `xywh`, where each box is encoded as `x1`, `y1`, `w` and `h`.
 
@@ -38,6 +42,7 @@ Additionally, each `BoxList` instance can also hold arbitrary additional informa
 for each bounding box, such as labels, visibility, probability scores etc.
 
 Here is an example on how to create a `BoxList` from a list of coordinates:
+
 ```python
 from maskrcnn_benchmark.structures.bounding_box import BoxList, FLIP_LEFT_RIGHT
 

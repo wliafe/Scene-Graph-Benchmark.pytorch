@@ -1,8 +1,8 @@
-## Installation
+# Installation
 
 Most of the requirements of this projects are exactly the same as [maskrcnn-benchmark](https://github.com/facebookresearch/maskrcnn-benchmark). If you have any problem of your environment, you should check their [issues page](https://github.com/facebookresearch/maskrcnn-benchmark/issues) first. Hope you will find the answer.
 
-### 安装命令
+## 安装命令
 
 ```bash
 conda env create -f environment.yml

@@ -33,30 +33,40 @@ from maskrcnn_benchmark.utils.metric_logger import MetricLogger
 
 
 def train(cfg, local_rank, distributed, logger):
-    debug_print(logger, 'prepare training')
-    model = build_detection_model(cfg) 
-    debug_print(logger, 'end model construction')
+    debug_print(logger, "prepare training")
+    model = build_detection_model(cfg)
+    debug_print(logger, "end model construction")
 
     # modules that should be always set in eval mode
     # their eval() method should be called after model.train() is called
-    eval_modules = (model.rpn, model.backbone, model.roi_heads.box,)
- 
+    eval_modules = (
+        model.rpn,
+        model.backbone,
+        model.roi_heads.box,
+    )
+
     fix_eval_modules(eval_modules)
 
     # NOTE, we slow down the LR of the layers start with the names in slow_heads
     if cfg.MODEL.ROI_RELATION_HEAD.PREDICTOR == "IMPPredictor":
-        slow_heads = ["roi_heads.relation.box_feature_extractor",
-                      "roi_heads.relation.union_feature_extractor.feature_extractor",]
+        slow_heads = [
+            "roi_heads.relation.box_feature_extractor",
+            "roi_heads.relation.union_feature_extractor.feature_extractor",
+        ]
     else:
         slow_heads = []
 
     # load pretrain layers to new layers
-    load_mapping = {"roi_heads.relation.box_feature_extractor" : "roi_heads.box.feature_extractor",
-                    "roi_heads.relation.union_feature_extractor.feature_extractor" : "roi_heads.box.feature_extractor"}
-    
+    load_mapping = {
+        "roi_heads.relation.box_feature_extractor": "roi_heads.box.feature_extractor",
+        "roi_heads.relation.union_feature_extractor.feature_extractor": "roi_heads.box.feature_extractor",
+    }
+
     if cfg.MODEL.ATTRIBUTE_ON:
         load_mapping["roi_heads.relation.att_feature_extractor"] = "roi_heads.attribute.feature_extractor"
-        load_mapping["roi_heads.relation.union_feature_extractor.att_feature_extractor"] = "roi_heads.attribute.feature_extractor"
+        load_mapping["roi_heads.relation.union_feature_extractor.att_feature_extractor"] = (
+            "roi_heads.attribute.feature_extractor"
+        )
 
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
@@ -65,17 +75,19 @@ def train(cfg, local_rank, distributed, logger):
     num_batch = cfg.SOLVER.IMS_PER_BATCH
     optimizer = make_optimizer(cfg, model, logger, slow_heads=slow_heads, slow_ratio=10.0, rl_factor=float(num_batch))
     scheduler = make_lr_scheduler(cfg, optimizer, logger)
-    debug_print(logger, 'end optimizer and shcedule')
+    debug_print(logger, "end optimizer and shcedule")
     # Initialize mixed-precision training
 
     if distributed:
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[local_rank], output_device=local_rank,
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
             # this should be removed if we update BatchNorm stats
             broadcast_buffers=False,
             find_unused_parameters=True,
         )
-    debug_print(logger, 'end distributed')
+    debug_print(logger, "end distributed")
     arguments = {}
     arguments["iteration"] = 0
 
@@ -87,25 +99,26 @@ def train(cfg, local_rank, distributed, logger):
     )
     # if there is certain checkpoint in output_dir, load it, else load pretrained detector
     if checkpointer.has_checkpoint():
-        extra_checkpoint_data = checkpointer.load(cfg.MODEL.PRETRAINED_DETECTOR_CKPT, 
-                                       update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD)
+        extra_checkpoint_data = checkpointer.load(
+            cfg.MODEL.PRETRAINED_DETECTOR_CKPT, update_schedule=cfg.SOLVER.UPDATE_SCHEDULE_DURING_LOAD
+        )
         arguments.update(extra_checkpoint_data)
     else:
         # load_mapping is only used when we init current model from detection model.
         checkpointer.load(cfg.MODEL.PRETRAINED_DETECTOR_CKPT, with_optim=False, load_mapping=load_mapping)
-    debug_print(logger, 'end load checkpointer')
+    debug_print(logger, "end load checkpointer")
     train_data_loader = make_data_loader(
         cfg,
-        mode='train',
+        mode="train",
         is_distributed=distributed,
         start_iter=arguments["iteration"],
     )
     val_data_loaders = make_data_loader(
         cfg,
-        mode='val',
+        mode="val",
         is_distributed=distributed,
     )
-    debug_print(logger, 'end dataloader')
+    debug_print(logger, "end dataloader")
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
 
     if cfg.SOLVER.PRE_VAL:
@@ -122,7 +135,9 @@ def train(cfg, local_rank, distributed, logger):
     print_first_grad = True
     for iteration, (images, targets, _) in enumerate(train_data_loader, start_iter):
         if any(len(target) < 1 for target in targets):
-            logger.error(f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}" )
+            logger.error(
+                f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}"
+            )
         data_time = time.time() - end
         iteration = iteration + 1
         arguments["iteration"] = iteration
@@ -146,11 +161,17 @@ def train(cfg, local_rank, distributed, logger):
         # Note: If mixed precision is not used, this ends up doing nothing
         # Otherwise apply loss scaling for mixed-precision recipe
         losses.backward()
-        
+
         # add clip_grad_norm from MOTIFS, tracking gradient, used for debug
-        verbose = (iteration % cfg.SOLVER.PRINT_GRAD_FREQ) == 0 or print_first_grad # print grad or not
+        verbose = (iteration % cfg.SOLVER.PRINT_GRAD_FREQ) == 0 or print_first_grad  # print grad or not
         print_first_grad = False
-        clip_grad_norm([(n, p) for n, p in model.named_parameters() if p.requires_grad], max_norm=cfg.SOLVER.GRAD_NORM_CLIP, logger=logger, verbose=verbose, clip=True)
+        clip_grad_norm(
+            [(n, p) for n, p in model.named_parameters() if p.requires_grad],
+            max_norm=cfg.SOLVER.GRAD_NORM_CLIP,
+            logger=logger,
+            verbose=verbose,
+            clip=True,
+        )
 
         optimizer.step()
 
@@ -185,12 +206,12 @@ def train(cfg, local_rank, distributed, logger):
         if iteration == max_iter:
             checkpointer.save("model_final", **arguments)
 
-        val_result = None # used for scheduler updating
+        val_result = None  # used for scheduler updating
         if cfg.SOLVER.TO_VAL and iteration % cfg.SOLVER.VAL_PERIOD == 0:
             logger.info("Start validating")
             val_result = run_val(cfg, model, val_data_loaders, distributed, logger)
             logger.info("Validation Result: %.4f" % val_result)
- 
+
         # scheduler should be called after optimizer.step() in pytorch>=1.1.0
         # https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate
         if cfg.SOLVER.SCHEDULE.TYPE == "WarmupReduceLROnPlateau":
@@ -203,18 +224,16 @@ def train(cfg, local_rank, distributed, logger):
 
     total_training_time = time.time() - start_training_time
     total_time_str = str(datetime.timedelta(seconds=total_training_time))
-    logger.info(
-        "Total training time: {} ({:.4f} s / it)".format(
-            total_time_str, total_training_time / (max_iter)
-        )
-    )
+    logger.info("Total training time: {} ({:.4f} s / it)".format(total_time_str, total_training_time / (max_iter)))
     return model
+
 
 def fix_eval_modules(eval_modules):
     for module in eval_modules:
         for _, param in module.named_parameters():
             param.requires_grad = False
         # DO NOT use module.eval(), otherwise the module will be in the test mode, i.e., all self.training condition is set to False
+
 
 def run_val(cfg, model, val_data_loaders, distributed, logger):
     if distributed:
@@ -226,37 +245,38 @@ def run_val(cfg, model, val_data_loaders, distributed, logger):
     if cfg.MODEL.KEYPOINT_ON:
         iou_types = iou_types + ("keypoints",)
     if cfg.MODEL.RELATION_ON:
-        iou_types = iou_types + ("relations", )
+        iou_types = iou_types + ("relations",)
     if cfg.MODEL.ATTRIBUTE_ON:
-        iou_types = iou_types + ("attributes", )
+        iou_types = iou_types + ("attributes",)
 
     dataset_names = cfg.DATASETS.VAL
     val_result = []
     for dataset_name, val_data_loader in zip(dataset_names, val_data_loaders):
         dataset_result = inference(
-                            cfg,
-                            model,
-                            val_data_loader,
-                            dataset_name=dataset_name,
-                            iou_types=iou_types,
-                            box_only=False if cfg.MODEL.RETINANET_ON else cfg.MODEL.RPN_ONLY,
-                            device=cfg.MODEL.DEVICE,
-                            expected_results=cfg.TEST.EXPECTED_RESULTS,
-                            expected_results_sigma_tol=cfg.TEST.EXPECTED_RESULTS_SIGMA_TOL,
-                            output_folder=None,
-                            logger=logger,
-                        )
+            cfg,
+            model,
+            val_data_loader,
+            dataset_name=dataset_name,
+            iou_types=iou_types,
+            box_only=False if cfg.MODEL.RETINANET_ON else cfg.MODEL.RPN_ONLY,
+            device=cfg.MODEL.DEVICE,
+            expected_results=cfg.TEST.EXPECTED_RESULTS,
+            expected_results_sigma_tol=cfg.TEST.EXPECTED_RESULTS_SIGMA_TOL,
+            output_folder=None,
+            logger=logger,
+        )
         synchronize()
         val_result.append(dataset_result)
     # support for multi gpu distributed testing
     gathered_result = all_gather(torch.tensor(dataset_result).cpu())
     gathered_result = [t.view(-1) for t in gathered_result]
     gathered_result = torch.cat(gathered_result, dim=-1).view(-1)
-    valid_result = gathered_result[gathered_result>=0]
+    valid_result = gathered_result[gathered_result >= 0]
     val_result = float(valid_result.mean())
     del gathered_result, valid_result
     torch.cuda.empty_cache()
     return val_result
+
 
 def run_test(cfg, model, distributed, logger):
     if distributed:
@@ -268,9 +288,9 @@ def run_test(cfg, model, distributed, logger):
     if cfg.MODEL.KEYPOINT_ON:
         iou_types = iou_types + ("keypoints",)
     if cfg.MODEL.RELATION_ON:
-        iou_types = iou_types + ("relations", )
+        iou_types = iou_types + ("relations",)
     if cfg.MODEL.ATTRIBUTE_ON:
-        iou_types = iou_types + ("attributes", )
+        iou_types = iou_types + ("attributes",)
     output_folders = [None] * len(cfg.DATASETS.TEST)
     dataset_names = cfg.DATASETS.TEST
     if cfg.OUTPUT_DIR:
@@ -278,7 +298,7 @@ def run_test(cfg, model, distributed, logger):
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
             mkdir(output_folder)
             output_folders[idx] = output_folder
-    data_loaders_val = make_data_loader(cfg, mode='test', is_distributed=distributed)
+    data_loaders_val = make_data_loader(cfg, mode="test", is_distributed=distributed)
     for output_folder, dataset_name, data_loader_val in zip(output_folders, dataset_names, data_loaders_val):
         inference(
             cfg,
@@ -326,9 +346,7 @@ def main():
 
     if args.distributed:
         torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(
-            backend="nccl", init_method="env://"
-        )
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
         synchronize()
 
     cfg.merge_from_file(args.config_file)
@@ -352,7 +370,7 @@ def main():
         logger.info(config_str)
     logger.info("Running with config:\n{}".format(cfg))
 
-    output_config_path = os.path.join(cfg.OUTPUT_DIR, 'config.yml')
+    output_config_path = os.path.join(cfg.OUTPUT_DIR, "config.yml")
     logger.info("Saving config into: {}".format(output_config_path))
     # save overloaded model config in the output directory
     save_config(cfg, output_config_path)
