@@ -4,6 +4,18 @@ Most of the requirements of this projects are exactly the same as [maskrcnn-benc
 
 ## 安装命令
 
+uv 安装
+
+```bash
+安装本地cuda12.8
+
+uv sync
+
+uv pip install -e . --no-build-isolation
+```
+
+conda安装
+
 ```bash
 conda env create -f environment.yml
 
